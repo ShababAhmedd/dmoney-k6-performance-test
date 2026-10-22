@@ -1,0 +1,3 @@
+# Test users are created per environment (contains emails/phone numbers)
+data/users.json
+reports/console-output.txt

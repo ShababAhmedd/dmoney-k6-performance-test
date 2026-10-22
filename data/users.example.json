@@ -1,0 +1,56 @@
+{
+  "agent1": {
+    "name": "Random Name",
+    "email": "your.email+k6agent1@gmail.com",
+    "password": "1234",
+    "phone_number": "01XXXXXXXXX",
+    "nid": "XXXXXXXXXX",
+    "role": "Agent",
+    "id": 0
+  },
+  "agent2": {
+    "name": "Random Name",
+    "email": "your.email+k6agent2@gmail.com",
+    "password": "1234",
+    "phone_number": "01XXXXXXXXX",
+    "nid": "XXXXXXXXXX",
+    "role": "Agent",
+    "id": 0
+  },
+  "customer1": {
+    "name": "Random Name",
+    "email": "your.email+k6customer1@gmail.com",
+    "password": "1234",
+    "phone_number": "01XXXXXXXXX",
+    "nid": "XXXXXXXXXX",
+    "role": "Customer",
+    "id": 0
+  },
+  "customer2": {
+    "name": "Random Name",
+    "email": "your.email+k6customer2@gmail.com",
+    "password": "1234",
+    "phone_number": "01XXXXXXXXX",
+    "nid": "XXXXXXXXXX",
+    "role": "Customer",
+    "id": 0
+  },
+  "merchant1": {
+    "name": "Random Name",
+    "email": "your.email+k6merchant1@gmail.com",
+    "password": "1234",
+    "phone_number": "01XXXXXXXXX",
+    "nid": "XXXXXXXXXX",
+    "role": "Merchant",
+    "id": 0
+  },
+  "merchant2": {
+    "name": "Random Name",
+    "email": "your.email+k6merchant2@gmail.com",
+    "password": "1234",
+    "phone_number": "01XXXXXXXXX",
+    "nid": "XXXXXXXXXX",
+    "role": "Merchant",
+    "id": 0
+  }
+}
