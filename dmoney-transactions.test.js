@@ -91,7 +91,8 @@ const thresholds = {
   // Global
   http_req_failed: ["rate<0.01"],
   http_req_duration: ["p(95)<1000"],
-  "checks{kind:transaction}": ["rate>0.99"],
+  checks: ["rate>=0.99"],
+  "checks{kind:transaction}": ["rate>=0.99"],
 };
 
 // Separate thresholds for every transaction API
@@ -99,7 +100,7 @@ for (const api of Object.keys(TRANSACTION_APIS)) {
   thresholds[`http_req_duration{api:${api}}`] = ["p(95)<1000", "p(99)<1500"];
   thresholds[`http_reqs{api:${api}}`] = ["count>0"];
   thresholds[`http_req_failed{api:${api}}`] = ["rate<0.01"];
-  thresholds[`checks{kind:transaction,api:${api}}`] = ["rate>0.99"];
+  thresholds[`checks{kind:transaction,api:${api}}`] = ["rate>=0.99"];
 }
 
 // Per phase x API sub-metrics, used to spot degradation as the workload changes
