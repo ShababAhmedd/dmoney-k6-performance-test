@@ -93,9 +93,12 @@ The backend returns **208** for business errors such as insufficient balance. k6
 
 ## How to run
 
-**Prerequisites:** [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) (tested with v2.3.0), Node.js 18+, and the DMoney backend running (default `http://localhost:5000`).
+**Prerequisites:** [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) (tested with v2.3.0), Node.js 18+, and the DMoney backend running (default `http://localhost:5000`) with the `Transactions.account` index in place (see [Backend fix](#backend-fix-deadlocks-under-concurrent-load)). Without it the backend deadlocks under this workload and the thresholds fail.
 
 ```bash
+# 0. (backend repo, once per database) add the index the balance locks rely on
+node migrations/add_account_index_to_transactions.js
+
 # 1. Create the 6 test users (once per environment). Users get random names, phone
 #    numbers and NIDs, a +alias Gmail address, password 1234, and are activated.
 node scripts/create-users.mjs
@@ -123,7 +126,7 @@ Example: `PHASE_SECONDS=5 RATE=2 ./run-test.sh` runs a quick smoke test.
 
 ## Results
 
-Run on 2026-10-22 against a local backend (Node/Express + MySQL), at `RATE=5`, for 2 minutes. 1,980 requests were sent and k6 dropped no iterations.
+Run on 2026-10-23 against a local backend (Node/Express + MySQL 8), at `RATE=5`, for 2 minutes. 1,979 requests were sent: 1,959 measured transactions plus 20 setup requests (logins, balance lookups, opening-balance deposits). k6 dropped no iterations, and **every threshold passed** (k6 exit code 0).
 
 ### Screenshots
 
@@ -139,59 +142,88 @@ Run on 2026-10-22 against a local backend (Node/Express + MySQL), at `RATE=5`, f
 
 ![Web dashboard](screenshots/web-dashboard.png)
 
+### Threshold outcome
+
+| Threshold | Limit | Result |
+|---|---|---|
+| Failed request rate (all requests) | < 1% | ✅ 0.00% |
+| p(95) response time (all requests) | < 1000 ms | ✅ 85.07 ms |
+| Transaction checks passed | > 99% | ✅ 100.00% (7,848 / 7,848) |
+| **Deposit**: p95 / p99 / failed / checks | 1000 ms / 1500 ms / 1% / 99% | ✅ 93.53 ms / 115.67 ms / 0.00% / 100% |
+| **Send Money**: p95 / p99 / failed / checks | 1000 ms / 1500 ms / 1% / 99% | ✅ 72.47 ms / 82.44 ms / 0.00% / 100% |
+| **Payment**: p95 / p99 / failed / checks | 1000 ms / 1500 ms / 1% / 99% | ✅ 75.12 ms / 85.95 ms / 0.00% / 100% |
+| Every phase × API: p95 / failed | 1000 ms / 1% | ✅ worst p95 97.38 ms (P3 deposit), 0.00% everywhere |
+
 ### API comparison (overall)
 
 Throughput is measured over the time each API was actually active.
 
 | API | Active time | Requests | Throughput | Avg | Median | p90 | p95 | p99 | Max | Failed | Checks passed |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Deposit | 60 s | 452 | 7.53 req/s | 79.45 ms | 76.13 ms | 106.36 ms | 115.77 ms | 133.61 ms | 157.26 ms | **22.35%** | 77.65% |
-| Send Money | 90 s | 453 | 5.03 req/s | 68.02 ms | 64.19 ms | 92.49 ms | 108.76 ms | 130.10 ms | 156.20 ms | **21.19%** | 78.81% |
-| Payment | 120 s | 1054 | 8.78 req/s | 81.53 ms | 77.43 ms | 117.41 ms | 126.81 ms | 143.73 ms | 183.30 ms | **7.69%** | 92.31% |
+| Deposit | 60 s | 452 | 7.53 req/s | 76.14 ms | 75.93 ms | 89.56 ms | 93.53 ms | 115.67 ms | 148.44 ms | 0.00% | 100.00% |
+| Send Money | 90 s | 452 | 5.02 req/s | 58.48 ms | 58.29 ms | 70.04 ms | 72.47 ms | 82.44 ms | 122.18 ms | 0.00% | 100.00% |
+| Payment | 120 s | 1055 | 8.79 req/s | 57.30 ms | 56.58 ms | 69.73 ms | 75.12 ms | 85.95 ms | 126.86 ms | 0.00% | 100.00% |
 
 ### Per phase
 
-| Phase | Total load | API | Requests | Avg | p95 | p99 | Failed |
-|---|---:|---|---:|---:|---:|---:|---:|
-| P1 (0–30 s) | 10 tx/s | sendmoney | 151 | 60.05 ms | 78.16 ms | 81.25 ms | 0.00% |
-| P1 (0–30 s) | 10 tx/s | payment | 151 | 60.41 ms | 78.97 ms | 83.60 ms | 0.00% |
-| P2 (30–60 s) | 15 tx/s | sendmoney | 151 | 71.74 ms | 108.69 ms | 115.90 ms | **23.18%** |
-| P2 (30–60 s) | 15 tx/s | deposit | 151 | 76.83 ms | 102.71 ms | 112.23 ms | 0.00% |
-| P2 (30–60 s) | 15 tx/s | payment | 151 | 71.23 ms | 109.56 ms | 116.75 ms | **18.54%** |
-| P3 (60–90 s) | 20 tx/s | deposit | 301 | 80.76 ms | 122.89 ms | 141.80 ms | **33.55%** |
-| P3 (60–90 s) | 20 tx/s | sendmoney | 151 | 72.26 ms | 125.08 ms | 148.48 ms | **40.40%** |
-| P3 (60–90 s) | 20 tx/s | payment | 150 | 72.79 ms | 122.62 ms | 144.04 ms | **35.33%** |
-| P4 (90–120 s) | 20 tx/s | payment | 602 | 91.59 ms | 130.68 ms | 146.72 ms | 0.00% |
-
-### Threshold outcome
-
-| Threshold | Result |
-|---|---|
-| p(95) < 1000 ms (global, per API, per phase) | ✅ passed everywhere (worst p95 was 130.68 ms) |
-| p(99) < 1500 ms per API | ✅ passed |
-| Failed requests < 1% | ❌ 14.04% overall (deposit 22.34%, send money 21.19%, payment 7.68%) |
-| Transaction checks > 99% | ❌ 85.83% overall (deposit 77.65%, send money 78.80%, payment 92.31%) |
-
-k6 exits with code 99 because the failure-rate and check thresholds were crossed.
+| Phase | Total load | API | Requests | Throughput | Avg | p95 | p99 | Max | Failed |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| P1 (0–30 s) | 10 tx/s | sendmoney | 151 | 5.03 req/s | 52.39 ms | 61.49 ms | 64.84 ms | 67.88 ms | 0.00% |
+| P1 (0–30 s) | 10 tx/s | payment | 150 | 5.00 req/s | 58.56 ms | 70.34 ms | 76.87 ms | 84.45 ms | 0.00% |
+| P2 (30–60 s) | 15 tx/s | sendmoney | 151 | 5.03 req/s | 61.18 ms | 73.14 ms | 78.73 ms | 91.03 ms | 0.00% |
+| P2 (30–60 s) | 15 tx/s | deposit | 151 | 5.03 req/s | 73.41 ms | 88.09 ms | 94.60 ms | 148.44 ms | 0.00% |
+| P2 (30–60 s) | 15 tx/s | payment | 151 | 5.03 req/s | 55.57 ms | 69.56 ms | 74.88 ms | 75.75 ms | 0.00% |
+| P3 (60–90 s) | 20 tx/s | deposit | 301 | 10.03 req/s | 77.50 ms | 97.38 ms | 122.19 ms | 138.19 ms | 0.00% |
+| P3 (60–90 s) | 20 tx/s | sendmoney | 150 | 5.00 req/s | 61.91 ms | 77.92 ms | 88.71 ms | 122.18 ms | 0.00% |
+| P3 (60–90 s) | 20 tx/s | payment | 151 | 5.03 req/s | 69.68 ms | 86.30 ms | 92.89 ms | 126.86 ms | 0.00% |
+| P4 (90–120 s) | 20 tx/s | payment | 603 | 20.10 req/s | 54.32 ms | 67.68 ms | 76.87 ms | 91.63 ms | 0.00% |
 
 ### Analysis
 
-**Response time.** All three APIs stayed fast: p95 was between 78 and 131 ms, roughly 8× below the 1 s target. Latency grew steadily with the workload. Payment p95 went from 79 ms (P1) to 110 ms (P2), 123 ms (P3) and 131 ms (P4), and its average rose about 50% (60 → 92 ms) when the load doubled from 10 to 20 tx/s. Send money had the lowest average latency (68 ms). Deposit (79 ms) and payment (82 ms) were slower. A deposit locks two accounts (agent and customer), and most payments ran in the busiest phase.
+**Response time.** All three APIs are far inside the 1 s target: the worst p95 of any API in any phase was 97 ms. **Deposit is the slowest API** (avg 76 ms, p95 94 ms). It locks and reads two balances (the agent's and the customer's) and checks the customer balance cap. Send money (avg 58 ms) and payment (avg 57 ms) lock only the payer's balance, and they perform about the same.
 
-**Throughput.** The server kept up with the requested arrival rate in every phase: 151 requests per flow per 30 s, no dropped iterations, and never more than 4 VUs in flight. Throughput was not the bottleneck.
+**Throughput.** The server kept up with the requested arrival rate in every phase. Every flow delivered 5 req/s (150–151 requests per 30 s), the two P3 deposit flows together delivered 10 req/s, and the four P4 payment flows delivered 20.1 req/s. No iterations were dropped. Throughput was never the bottleneck.
 
-**Failures and degradation.** The real problem is errors. P1 and P4 had **0%** failures. P2 and P3, where deposits run alongside customer-to-customer transfers, failed **18–40%** of transactions. P4 had the highest request rate (20 tx/s, all payments) and still had no errors. So the failures come from contention between different transaction types on the same accounts, not from request volume. The k6 web dashboard shows the failure rate rising at 30 s, peaking in P3 and dropping back to zero at 90 s.
+**Failure rate.** 0 of 1,979 requests failed, and all 7,848 transaction checks passed (status 201, success, `trnxId`, exact message).
 
-**Root cause.** Every failed request was an HTTP 500 with `"Deadlock found when trying to get lock; try restarting transaction"` (collected with `DEBUG=1`). All three controllers check the balance with:
+**Degradation as the workload changes.** Latency rises in phases where different transaction types hit the **same accounts** at the same time, not simply when the request rate is highest:
+
+- Send money p95 went from 61 ms (P1) to 73 ms (P2) and 78 ms (P3), **+27%**.
+- Payment p95 went from 70 ms (P1, P2) to 86 ms (P3), **+23%**.
+- Deposit p95 went from 88 ms (P2) to 97 ms (P3), when the deposit rate doubled.
+- P4 runs at the same 20 tx/s as P3 but has the **lowest** payment latency of the run (p95 68 ms). Its four payments come from four different payers, so they never wait on each other's row locks.
+
+In P3, Customer 1 and Customer 2 are each locked by a deposit, a send money and a payment at the same time. Those requests queue behind each other's `SELECT … FOR UPDATE` on the same balance rows, and that queueing is what shows up as the P3 latency increase. The k6 web dashboard shows the same shape: p95 climbs from 30 s, peaks around 60–90 s and drops back when the workload switches to independent payments at 90 s.
+
+### Backend fix: deadlocks under concurrent load
+
+The first run (2026-10-22, same script and settings) breached 13 thresholds. **14.04%** of requests failed with HTTP 500 `"Deadlock found when trying to get lock; try restarting transaction"`, all of them in P2 and P3. At this point the test was correct and the backend had a real concurrency bug.
+
+**Root cause.** All three transaction controllers lock the payer's running balance with:
 
 ```sql
 SELECT COALESCE(SUM(credit) - SUM(debit), 0) FROM Transactions WHERE account = ? FOR UPDATE
 ```
 
-The `Transactions` table has **no index on `account`** (only the primary key). So this locking read walks the whole primary index, and it has to wait on rows held by other in-flight transactions. MySQL's `SHOW ENGINE INNODB STATUS` confirmed it: two transactions running this balance lock for Customer 1 each held a `PRIMARY` record lock the other was waiting for, and InnoDB rolled one back. A deposit takes two of these locks (agent, then customer), so it collides with transfers on the same customer. The table also grows by 2–3 rows per transaction, so each scan gets slower over time, which adds to the latency growth.
+The `Transactions` table had **no index on `account`** (only the primary key). So every locking read scanned, and locked as it went, the whole primary index (about 7,500 rows). Transactions on *unrelated* accounts therefore blocked each other. A deposit, which takes two of these locks, formed lock cycles with concurrent transfers, and InnoDB aborted one side of each cycle.
 
-**Recommendations for the backend**
+**Fix** (in the backend repository):
 
-1. Add an index: `CREATE INDEX idx_transactions_account ON Transactions(account);`. The locking read then touches only that account's rows.
-2. Lock the accounts in a consistent order (for example sorted by phone number), or lock one balance row per account instead of summing the ledger.
-3. Retry on `ER_LOCK_DEADLOCK` on the server side instead of returning 500 to the client.
+- `migrations/add_account_index_to_transactions.js` is an idempotent migration that runs `ALTER TABLE Transactions ADD INDEX idx_transactions_account (account)`.
+- `sequelizeModel/Transactions.js` declares the same index, so new databases get it from `sequelize.sync()`.
+
+With the index, `EXPLAIN` shows the locking read as a `ref` lookup on `idx_transactions_account`, so it locks only that account's rows. The lock order is then cycle-free. Send money and payment lock only the payer. Deposit locks agent, then customer, and no transaction holds a customer lock while waiting for an agent. No controller code had to change.
+
+| Metric | Before fix (2026-10-22) | After fix (2026-10-23) |
+|---|---:|---:|
+| Failed requests | 14.04% | **0.00%** |
+| Transaction checks passed | 85.83% | **100.00%** |
+| p95 response time (all requests) | 122.88 ms | **85.07 ms** |
+| Avg response time (all requests) | 77.23 ms | **61.37 ms** |
+| Breached thresholds | 13 | **0** |
+| k6 exit code | 99 | **0** |
+
+**Further recommendations for the backend**
+
+1. Retry on `ER_LOCK_DEADLOCK` (or `ER_LOCK_WAIT_TIMEOUT`) on the server side instead of returning 500 to the client.
+2. Balances are recomputed by summing the full ledger on every transaction. That cost grows with each row (2–3 rows per transaction). A per-account balance snapshot or a covering index on `(account, credit, debit)` would keep balance reads constant-time as the table grows.
